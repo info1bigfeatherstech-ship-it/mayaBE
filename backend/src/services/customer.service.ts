@@ -71,7 +71,9 @@ export async function deleteCustomer(id: string) {
   if (!mongoose.isValidObjectId(id)) throw new ApiError(400, "Invalid customer id");
   const customer = await Customer.findById(id);
   if (!customer) throw new ApiError(404, "Customer not found");
-  const used = await Product.countDocuments({ customer: customer._id });
+  const used = await Product.countDocuments({
+    $or: [{ customer: customer._id }, { "customerAssignments.customer": customer._id }],
+  });
   if (used > 0) {
     throw new ApiError(409, "This customer is used by products. Reassign those products first.");
   }

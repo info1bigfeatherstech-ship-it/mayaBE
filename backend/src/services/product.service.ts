@@ -9,12 +9,14 @@ import {
 import {
   deleteUploadedImages,
   parseExistingImages,
+  splitUploadedFiles,
   uniqueImages,
   uploadedFilesToUrls,
 } from "./upload.service";
 import { normalizeInfoSections } from "../config/infoSections";
 import { erpPayload } from "./erpProduct";
-import { publicListing } from "./publicListing";
+import { publicListing, publicOptions } from "./publicListing";
+import { extraVariantSku, serialVariantSku } from "../utils/variantSku";
 import type { ProductFieldsInput } from "../validators/product.validator";
 
 type PopulatedCategory = {
@@ -24,6 +26,38 @@ type PopulatedCategory = {
 };
 
 type NamedRef = { _id: mongoose.Types.ObjectId; code?: string; name?: string };
+
+function isoDate(value: unknown): string {
+  if (!value) return "";
+  const date = value instanceof Date ? value : new Date(String(value));
+  return Number.isNaN(date.getTime()) ? "" : date.toISOString();
+}
+
+function serializeCustomerAssignments(data: Record<string, any>) {
+  const rows = (data.customerAssignments || [])
+    .map((row: Record<string, any>) => {
+      const customer = serializeNamedRef(row.customer);
+      if (!customer) return null;
+      return {
+        ...customer,
+        styleCode: row.styleCode || "",
+        repeatOrder: row.repeatOrder === "Yes" ? "Yes" : "No",
+        repeatOrderNumber: row.repeatOrderNumber || "None",
+      };
+    })
+    .filter(Boolean);
+  if (rows.length) return rows;
+  const legacy = serializeNamedRef(data.customer);
+  if (!legacy) return [];
+  return [
+    {
+      ...legacy,
+      styleCode: data.customerStyleCode || "",
+      repeatOrder: data.repeatOrder === "Yes" ? "Yes" : "No",
+      repeatOrderNumber: data.repeatOrderNumber || "None",
+    },
+  ];
+}
 
 function serializeNamedRef(value: NamedRef | mongoose.Types.ObjectId | null | undefined) {
   if (value && typeof value === "object" && "name" in value) {
@@ -39,23 +73,154 @@ function serializeNamedRef(value: NamedRef | mongoose.Types.ObjectId | null | un
   return null;
 }
 
-function serializeVariants(product: Record<string, any>, forAdmin: boolean) {
+function variantAttributes(row: Record<string, any>): { key: string; value: string }[] {
+  const listed = (row.attributes || [])
+    .map((item: { key?: string; value?: string }) => ({
+      key: String(item.key || "").trim(),
+      value: String(item.value || "").trim(),
+    }))
+    .filter((item: { key: string; value: string }) => item.key && item.value);
+  if (listed.length) return listed.slice(0, 10);
+  const fallback: { key: string; value: string }[] = [];
+  if (row.color) fallback.push({ key: "Color", value: String(row.color).trim() });
+  if (row.size) fallback.push({ key: "Size", value: String(row.size).trim() });
+  return fallback;
+}
+
+function serializeSubVariants(rows: Record<string, any>[] | undefined, parentSku: string) {
+  return (rows || []).map((row, index) => ({
+    sku: `${parentSku}-${index + 1}`,
+    title: row.title || "",
+    attributes: variantAttributes(row),
+    images: uniqueImages(row.images || []).slice(0, 5),
+    color: row.color || "",
+    size: row.size || "",
+    status: row.status || "In Stock",
+    stockQty: Number(row.stockQty) || 0,
+    priceAdjustment: Number(row.priceAdjustment) || 0,
+  }));
+}
+
+function serializeVariants(product: Record<string, any>) {
   if (product.variant !== "Yes") return [];
-  return (product.variantDetails || []).map((row: Record<string, any>) => {
-    const base = {
+  const productCode = String(product.productCode || "");
+  return (product.variantDetails || []).map((row: Record<string, any>, index: number) => {
+    const sku = extraVariantSku(productCode, index);
+    return {
+      sku,
+      title: row.title || "",
+      description: row.description || "",
+      attributes: variantAttributes(row),
+      images: uniqueImages(row.images || []).slice(0, 5),
       color: row.color || "",
       size: row.size || "",
-      sku: row.sku || "",
       status: row.status || "In Stock",
-    };
-    if (!forAdmin) return base;
-    return {
-      ...base,
-      barcode: row.barcode || "",
       stockQty: Number(row.stockQty) || 0,
       priceAdjustment: Number(row.priceAdjustment) || 0,
+      subVariants: serializeSubVariants(row.subVariants, sku),
     };
   });
+}
+
+function nestedVariantImages(product: {
+  images?: string[];
+  primarySubVariants?: { images?: string[] }[];
+  variantDetails?: { images?: string[]; subVariants?: { images?: string[] }[] }[];
+}) {
+  return uniqueImages([
+    ...(product.images || []),
+    ...(product.primarySubVariants || []).flatMap((row) => row.images || []),
+    ...(product.variantDetails || []).flatMap((row) => [
+      ...(row.images || []),
+      ...(row.subVariants || []).flatMap((sub) => sub.images || []),
+    ]),
+  ]);
+}
+
+function knownImageUrls(product: {
+  images?: string[];
+  primarySubVariants?: { images?: string[] }[];
+  variantDetails?: { images?: string[]; subVariants?: { images?: string[] }[] }[];
+}) {
+  return new Set(nestedVariantImages(product));
+}
+
+function retainKnownImages(urls: string[] | undefined, known: Set<string>) {
+  return uniqueImages(urls || []).filter((url) => known.has(url)).slice(0, 5);
+}
+
+function retainKnownVariantImages(rows: Record<string, any>[], known: Set<string>) {
+  return rows.map((row) => ({
+    ...row,
+    images: retainKnownImages(row.images, known),
+    subVariants: (row.subVariants || []).map((sub: Record<string, any>) => ({
+      ...sub,
+      images: retainKnownImages(sub.images, known),
+    })),
+  }));
+}
+
+async function attachUploadedImages(
+  current: string[] | undefined,
+  files: Express.Multer.File[] | undefined
+) {
+  if (!files?.length) return { images: uniqueImages(current || []).slice(0, 5), created: [] as string[] };
+  const urls = await uploadedFilesToUrls(files);
+  return { images: uniqueImages([...(current || []), ...urls]).slice(0, 5), created: urls };
+}
+
+async function attachVariantImages(
+  rows: Record<string, any>[],
+  uploads: Map<number, Express.Multer.File[]>,
+  subUploads: Map<string, Express.Multer.File[]>
+) {
+  const next = [...rows];
+  const created: string[] = [];
+  try {
+    for (const [index, files] of uploads.entries()) {
+      if (!next[index]) continue;
+      const attached = await attachUploadedImages(next[index].images, files);
+      created.push(...attached.created);
+      next[index] = { ...next[index], images: attached.images };
+    }
+    for (const [key, files] of subUploads.entries()) {
+      const [parent, sub] = key.split("_").map(Number);
+      if (!next[parent]?.subVariants?.[sub]) continue;
+      const attached = await attachUploadedImages(next[parent].subVariants[sub].images, files);
+      created.push(...attached.created);
+      next[parent] = {
+        ...next[parent],
+        subVariants: next[parent].subVariants.map((row: Record<string, any>, index: number) =>
+          index === sub ? { ...row, images: attached.images } : row
+        ),
+      };
+    }
+    return { rows: next, created };
+  } catch (error) {
+    await deleteUploadedImages(created);
+    throw error;
+  }
+}
+
+async function attachPrimarySubImages(
+  rows: Record<string, any>[],
+  uploads: Map<number, Express.Multer.File[]>,
+  known: Set<string>
+) {
+  const next = (rows || []).map((row) => ({ ...row, images: retainKnownImages(row.images, known) }));
+  const created: string[] = [];
+  try {
+    for (const [index, files] of uploads.entries()) {
+      if (!next[index]) continue;
+      const attached = await attachUploadedImages(next[index].images, files);
+      created.push(...attached.created);
+      next[index] = { ...next[index], images: attached.images };
+    }
+    return { rows: next, created };
+  } catch (error) {
+    await deleteUploadedImages(created);
+    throw error;
+  }
 }
 
 function serializeProduct(
@@ -92,13 +257,15 @@ function serializeProduct(
       .filter((item: { key: string; value: string }) => item.key && item.value),
     infoSections: normalizeInfoSections(data.infoSections),
     listing: publicListing(data),
+    modelCode: serialVariantSku(String(data.productCode || ""), 0),
+    options: publicOptions(data),
   };
 
   if (!forAdmin) return publicFields;
 
   return {
     ...publicFields,
-    sku: data.sku || data.productCode,
+    sku: serialVariantSku(String(data.productCode || ""), 0),
     purchaseCode: data.purchaseCode || "",
     productType: data.productType || "",
     gender: data.gender || "",
@@ -115,12 +282,16 @@ function serializeProduct(
     availableColors: data.availableColors || [],
     sizeRange: data.sizeRange || "",
     variant: data.variant === "Yes" ? "Yes" : "No",
-    variantDetails: serializeVariants(data, true),
+    variantDetails: serializeVariants(data),
+    primarySubVariants: serializeSubVariants(
+      data.primarySubVariants,
+      serialVariantSku(String(data.productCode || ""), 0)
+    ),
     productStatus: data.productStatus === "Inactive" ? "Inactive" : "Active",
     featuredProduct: data.featuredProduct === "Yes" ? "Yes" : "No",
     marketSuitability: data.marketSuitability || [],
-    createdAt: data.createdAt,
-    updatedAt: data.updatedAt,
+    createdAt: isoDate(data.createdAt),
+    updatedAt: isoDate(data.updatedAt),
     developmentDate: {
       month: data.developmentDate?.month || "",
       year: data.developmentDate?.year || "",
@@ -140,6 +311,7 @@ function serializeProduct(
     readyStockQuantity: data.readyStockQuantity || "",
     readyStockQuantityUnit: data.readyStockQuantityUnit || "Pcs",
     customer: serializeNamedRef(data.customer),
+    customers: serializeCustomerAssignments(data),
     customerStyleCode: data.customerStyleCode || "",
     repeatOrder: data.repeatOrder === "Yes" ? "Yes" : "No",
     repeatOrderNumber: data.repeatOrderNumber || "None",
@@ -150,7 +322,8 @@ function populateProduct(query: mongoose.Query<any, any>) {
   return query
     .populate("category", "name slug")
     .populate("factory", "code name")
-    .populate("customer", "code name");
+    .populate("customer", "code name")
+    .populate("customerAssignments.customer", "code name");
 }
 
 async function assertUniqueProductCode(productCode: string, excludeId?: string) {
@@ -227,7 +400,9 @@ export async function createProduct(input: ProductFieldsInput, files?: Express.M
   await getCategoryById(input.category);
   await assertUniqueProductCode(input.productCode);
 
-  const images = uniqueImages(await uploadedFilesToUrls(files));
+  const split = splitUploadedFiles(files);
+  const images = uniqueImages(await uploadedFilesToUrls(split.parent));
+  let variantUploads: string[] = [];
   if (images.length > 5) {
     await deleteUploadedImages(images);
     throw new ApiError(400, "A product can have a maximum of 5 images");
@@ -235,6 +410,13 @@ export async function createProduct(input: ProductFieldsInput, files?: Express.M
 
   try {
     const erp = await erpPayload(input.erp, input.productCode);
+    const withImages = await attachVariantImages(
+      retainKnownVariantImages(erp.variantDetails || [], new Set()),
+      split.variants,
+      split.subs
+    );
+    const primarySubs = await attachPrimarySubImages(erp.primarySubVariants || [], split.primarySubs, new Set());
+    variantUploads = [...withImages.created, ...primarySubs.created];
     const product = await Product.create({
       productCode: input.productCode.trim(),
       name: input.name.trim(),
@@ -245,17 +427,20 @@ export async function createProduct(input: ProductFieldsInput, files?: Express.M
       attributes: input.attributes || [],
       infoSections: normalizeInfoSections(input.infoSections),
       ...erp,
+      variantDetails: withImages.rows,
+      primarySubVariants: primarySubs.rows,
     });
 
     const populated = await product.populate([
       { path: "category", select: "name slug" },
       { path: "factory", select: "code name" },
       { path: "customer", select: "code name" },
+      { path: "customerAssignments.customer", select: "code name" },
     ]);
     const pathMap = await buildCategoryPathMap();
     return serializeProduct(populated, pathMap, true);
   } catch (error) {
-    await deleteUploadedImages(images);
+    await deleteUploadedImages([...images, ...variantUploads]);
     throw error;
   }
 }
@@ -279,10 +464,11 @@ export async function updateProduct(
   await assertUniqueProductCode(input.productCode, id);
 
   const currentImages = product.images || [];
+  const split = splitUploadedFiles(files);
   const keptImages = uniqueImages(
     parseExistingImages(rawExistingImages).filter((url) => currentImages.includes(url))
   );
-  const newImages = await uploadedFilesToUrls(files);
+  const newImages = await uploadedFilesToUrls(split.parent);
   const nextImages = uniqueImages([...keptImages, ...newImages]);
 
   if (nextImages.length > 5) {
@@ -290,7 +476,9 @@ export async function updateProduct(
     throw new ApiError(400, "A product can have a maximum of 5 images");
   }
 
+  const previousVariantImages = nestedVariantImages(product).filter((url) => !currentImages.includes(url));
   const removed = currentImages.filter((url) => !nextImages.includes(url));
+  let variantUploads: string[] = [];
 
   try {
     product.productCode = input.productCode.trim();
@@ -302,11 +490,31 @@ export async function updateProduct(
     product.set("attributes", input.attributes || []);
     product.set("infoSections", normalizeInfoSections(input.infoSections));
     if (input.erp) {
-      product.set(await erpPayload(input.erp, input.productCode));
+      const erp = await erpPayload(input.erp, input.productCode);
+      const known = knownImageUrls(product);
+      const withImages = await attachVariantImages(
+        retainKnownVariantImages(erp.variantDetails || [], known),
+        split.variants,
+        split.subs
+      );
+      const primarySubs = await attachPrimarySubImages(erp.primarySubVariants || [], split.primarySubs, known);
+      variantUploads = [...withImages.created, ...primarySubs.created];
+      product.set({
+        ...erp,
+        variantDetails: withImages.rows,
+        primarySubVariants: primarySubs.rows,
+      });
+      const nextVariantImages = nestedVariantImages({
+        variantDetails: withImages.rows,
+        primarySubVariants: primarySubs.rows,
+      });
+      removed.push(
+        ...previousVariantImages.filter((url) => !nextVariantImages.includes(url) && !nextImages.includes(url))
+      );
     }
     await product.save();
   } catch (error) {
-    await deleteUploadedImages(newImages);
+    await deleteUploadedImages([...newImages, ...variantUploads]);
     throw error;
   }
 
@@ -316,6 +524,7 @@ export async function updateProduct(
     { path: "category", select: "name slug" },
     { path: "factory", select: "code name" },
     { path: "customer", select: "code name" },
+    { path: "customerAssignments.customer", select: "code name" },
   ]);
   const pathMap = await buildCategoryPathMap();
   return serializeProduct(populated, pathMap, true);
@@ -331,7 +540,7 @@ export async function deleteProduct(id: string) {
     throw new ApiError(404, "Product not found");
   }
 
-  await deleteUploadedImages(product.images || []);
+  await deleteUploadedImages(nestedVariantImages(product));
   await product.deleteOne();
   return { id };
 }

@@ -6,11 +6,78 @@ const monthYearSchema = {
   _id: false,
 };
 
+const variantAttributeSchema = new Schema(
+  {
+    key: { type: String, required: true, trim: true, maxlength: 80 },
+    value: { type: String, required: true, trim: true, maxlength: 200 },
+  },
+  { _id: false }
+);
+
+const subVariantSchema = new Schema(
+  {
+    sku: { type: String, default: "", trim: true, maxlength: 80 },
+    title: { type: String, default: "", trim: true, maxlength: 160 },
+    attributes: {
+      type: [variantAttributeSchema],
+      default: [],
+      validate: {
+        validator(value: unknown[]) {
+          return Array.isArray(value) && value.length <= 10;
+        },
+        message: "A sub-variant can have a maximum of 10 fields",
+      },
+    },
+    images: {
+      type: [String],
+      default: [],
+      validate: {
+        validator(value: string[]) {
+          return Array.isArray(value) && value.length <= 5;
+        },
+        message: "A sub-variant can have a maximum of 5 images",
+      },
+    },
+    color: { type: String, default: "", trim: true, maxlength: 40 },
+    size: { type: String, default: "", trim: true, maxlength: 120 },
+    stockQty: { type: Number, default: 0, min: 0, max: 100000000 },
+    priceAdjustment: { type: Number, default: 0, min: -100000, max: 100000 },
+    status: {
+      type: String,
+      enum: ["In Stock", "Low Stock", "Out of Stock"],
+      default: "In Stock",
+    },
+  },
+  { _id: false }
+);
+
 const variantSchema = new Schema(
   {
-    color: { type: String, required: true, trim: true, maxlength: 40 },
-    size: { type: String, required: true, trim: true, maxlength: 40 },
     sku: { type: String, required: true, trim: true, maxlength: 80 },
+    title: { type: String, default: "", trim: true, maxlength: 160 },
+    description: { type: String, default: "", trim: true, maxlength: 2000 },
+    attributes: {
+      type: [variantAttributeSchema],
+      default: [],
+      validate: {
+        validator(value: unknown[]) {
+          return Array.isArray(value) && value.length <= 10;
+        },
+        message: "A variant can have a maximum of 10 fields",
+      },
+    },
+    images: {
+      type: [String],
+      default: [],
+      validate: {
+        validator(value: string[]) {
+          return Array.isArray(value) && value.length <= 5;
+        },
+        message: "A variant can have a maximum of 5 images",
+      },
+    },
+    color: { type: String, default: "", trim: true, maxlength: 40 },
+    size: { type: String, default: "", trim: true, maxlength: 120 },
     barcode: { type: String, default: "", trim: true, maxlength: 40 },
     stockQty: { type: Number, default: 0, min: 0, max: 100000000 },
     priceAdjustment: { type: Number, default: 0, min: -100000, max: 100000 },
@@ -18,6 +85,16 @@ const variantSchema = new Schema(
       type: String,
       enum: ["In Stock", "Low Stock", "Out of Stock"],
       default: "In Stock",
+    },
+    subVariants: {
+      type: [subVariantSchema],
+      default: [],
+      validate: {
+        validator(value: unknown[]) {
+          return Array.isArray(value) && value.length <= 20;
+        },
+        message: "A variant can have a maximum of 20 sub-variants",
+      },
     },
   },
   { _id: false }
@@ -157,6 +234,16 @@ const productSchema = new Schema(
     },
     sizeRange: { type: String, default: "", trim: true, maxlength: 120 },
     variant: { type: String, enum: ["Yes", "No"], default: "No" },
+    primarySubVariants: {
+      type: [subVariantSchema],
+      default: [],
+      validate: {
+        validator(value: unknown[]) {
+          return Array.isArray(value) && value.length <= 20;
+        },
+        message: "A product can have a maximum of 20 primary sub-variants",
+      },
+    },
     variantDetails: {
       type: [variantSchema],
       default: [],
@@ -178,6 +265,28 @@ const productSchema = new Schema(
     readyStockQuantity: { type: String, default: "", trim: true, maxlength: 40 },
     readyStockQuantityUnit: { type: String, default: "Pcs", trim: true, maxlength: 20 },
     customer: { type: Schema.Types.ObjectId, ref: "Customer", default: null },
+    customerAssignments: {
+      type: [
+        {
+          customer: { type: Schema.Types.ObjectId, ref: "Customer", default: null },
+          styleCode: { type: String, default: "", trim: true, maxlength: 40 },
+          repeatOrder: { type: String, enum: ["Yes", "No"], default: "No" },
+          repeatOrderNumber: {
+            type: String,
+            enum: ["None", "1st", "2nd", "3rd"],
+            default: "None",
+          },
+          _id: false,
+        },
+      ],
+      default: [],
+      validate: {
+        validator(value: unknown[]) {
+          return Array.isArray(value) && value.length <= 10;
+        },
+        message: "A product can have a maximum of 10 customers",
+      },
+    },
     customerStyleCode: { type: String, default: "", trim: true, maxlength: 40 },
     repeatOrder: { type: String, enum: ["Yes", "No"], default: "No" },
     repeatOrderNumber: {

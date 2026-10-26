@@ -65,6 +65,50 @@ function uploadToCloudinary(file: Express.Multer.File): Promise<string> {
   });
 }
 
+export function splitUploadedFiles(files?: Express.Multer.File[]): {
+  parent: Express.Multer.File[];
+  variants: Map<number, Express.Multer.File[]>;
+  subs: Map<string, Express.Multer.File[]>;
+  primarySubs: Map<number, Express.Multer.File[]>;
+} {
+  const parent: Express.Multer.File[] = [];
+  const variants = new Map<number, Express.Multer.File[]>();
+  const subs = new Map<string, Express.Multer.File[]>();
+  const primarySubs = new Map<number, Express.Multer.File[]>();
+  for (const file of files || []) {
+    if (file.fieldname === "images") {
+      if (parent.length < 5) parent.push(file);
+      continue;
+    }
+    const variantMatch = file.fieldname.match(/^variantImage_(\d+)$/);
+    if (variantMatch) {
+      const index = Number(variantMatch[1]);
+      if (!Number.isInteger(index) || index < 0) continue;
+      const list = variants.get(index) || [];
+      if (list.length < 5) list.push(file);
+      variants.set(index, list);
+      continue;
+    }
+    const subMatch = file.fieldname.match(/^subImage_(\d+)_(\d+)$/);
+    if (subMatch) {
+      const key = `${Number(subMatch[1])}_${Number(subMatch[2])}`;
+      const list = subs.get(key) || [];
+      if (list.length < 5) list.push(file);
+      subs.set(key, list);
+      continue;
+    }
+    const primaryMatch = file.fieldname.match(/^primarySubImage_(\d+)$/);
+    if (primaryMatch) {
+      const index = Number(primaryMatch[1]);
+      if (!Number.isInteger(index) || index < 0) continue;
+      const list = primarySubs.get(index) || [];
+      if (list.length < 5) list.push(file);
+      primarySubs.set(index, list);
+    }
+  }
+  return { parent, variants, subs, primarySubs };
+}
+
 export async function uploadedFilesToUrls(files?: Express.Multer.File[]): Promise<string[]> {
   if (!files?.length) return [];
 

@@ -12,17 +12,23 @@ export function ensureUploadDirExists() {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
+const VARIANT_IMAGE_FIELD = /^(variantImage_\d+|subImage_\d+_\d+|primarySubImage_\d+)$/;
+
 export const productImageUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
     fileSize: MAX_FILE_SIZE,
-    files: 5,
+    files: 250,
   },
   fileFilter(_req, file, cb) {
     if (!ALLOWED_TYPES.has(file.mimetype)) {
       cb(new ApiError(400, "Only JPG, PNG, and WEBP images are allowed"));
       return;
     }
+    if (file.fieldname !== "images" && !VARIANT_IMAGE_FIELD.test(file.fieldname)) {
+      cb(new ApiError(400, "Unexpected image field"));
+      return;
+    }
     cb(null, true);
   },
-}).array("images", 5);
+}).any();

@@ -42,14 +42,31 @@ const monthYearSchema = z.object({
   year: z.string().trim().max(4).optional().default(""),
 });
 
+const subVariantSchema = z.object({
+  title: z.string().trim().max(160).optional().default(""),
+  attributes: z.array(attributeSchema).max(10).optional().default([]),
+  images: z.array(z.string().trim().min(1).max(500)).max(5).optional().default([]),
+  color: z.string().trim().max(40).optional().default(""),
+  size: z.string().trim().max(120).optional().default(""),
+  sku: z.string().trim().max(80).optional().default(""),
+  stockQty: z.coerce.number().min(0).max(100000000).optional().default(0),
+  priceAdjustment: z.coerce.number().min(-100000).max(100000).optional().default(0),
+  status: z.enum(VARIANT_STATUSES).optional().default("In Stock"),
+});
+
 const variantSchema = z.object({
-  color: z.string().trim().min(1).max(40),
-  size: z.string().trim().min(1).max(40),
-  sku: z.string().trim().min(1).max(80),
+  title: z.string().trim().max(160).optional().default(""),
+  description: z.string().trim().max(2000).optional().default(""),
+  attributes: z.array(attributeSchema).max(10).optional().default([]),
+  images: z.array(z.string().trim().min(1).max(500)).max(5).optional().default([]),
+  color: z.string().trim().max(40).optional().default(""),
+  size: z.string().trim().max(120).optional().default(""),
+  sku: z.string().trim().max(80).optional().default(""),
   barcode: z.string().trim().max(40).optional().default(""),
   stockQty: z.coerce.number().min(0).max(100000000).optional().default(0),
   priceAdjustment: z.coerce.number().min(-100000).max(100000).optional().default(0),
   status: z.enum(VARIANT_STATUSES).optional().default("In Stock"),
+  subVariants: z.array(subVariantSchema).max(20).optional().default([]),
 });
 
 const optionalId = z
@@ -80,6 +97,7 @@ export const erpSchema = z.object({
   sizeRange: z.string().trim().max(120).optional().default(""),
   variant: z.enum(YES_NO).optional().default("No"),
   variantDetails: z.array(variantSchema).max(200).optional().default([]),
+  primarySubVariants: z.array(subVariantSchema).max(20).optional().default([]),
   factoryId: optionalId,
   factoryPriceEXW: z.string().trim().max(40).optional().default(""),
   salePrice: z.string().trim().max(40).optional().default(""),
@@ -94,6 +112,18 @@ export const erpSchema = z.object({
   customerStyleCode: z.string().trim().max(40).optional().default(""),
   repeatOrder: z.enum(YES_NO).optional().default("No"),
   repeatOrderNumber: z.enum(REPEAT_NUMBERS).optional().default("None"),
+  customers: z
+    .array(
+      z.object({
+        customerId: optionalId,
+        styleCode: z.string().trim().max(40).optional().default(""),
+        repeatOrder: z.enum(YES_NO).optional().default("No"),
+        repeatOrderNumber: z.enum(REPEAT_NUMBERS).optional().default("None"),
+      })
+    )
+    .max(10)
+    .optional()
+    .default([]),
   productStatus: z.enum(PRODUCT_STATUSES).optional().default("Active"),
   featuredProduct: z.enum(YES_NO).optional().default("No"),
   marketSuitability: z.array(z.string().trim().min(1).max(40)).max(20).optional().default([]),
