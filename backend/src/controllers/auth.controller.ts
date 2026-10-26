@@ -1,12 +1,12 @@
 import type { Request, Response } from "express";
-import { clearAuthCookies, cookieOptions, loginAdmin } from "../services/auth.service";
+import { clearAuthCookies, loginAdmin, setAuthCookie } from "../services/auth.service";
 import { successResponse } from "../utils/ApiResponse";
 import { asyncHandler } from "../utils/asyncHandler";
 
 export const login = asyncHandler(async (req: Request, res: Response) => {
   const result = await loginAdmin(req.body);
   clearAuthCookies(res);
-  res.cookie("maya_admin_token", result.token, cookieOptions());
+  setAuthCookie(res, result.token);
   res.setHeader("Cache-Control", "no-store");
   res.status(200).json(
     successResponse("Logged in successfully", {
