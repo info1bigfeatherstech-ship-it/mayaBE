@@ -450,3 +450,46 @@ export async function getCategoryById(id: string) {
   }
   return category;
 }
+
+export function normalizeCategoryPath(input: string): string {
+  return input
+    .trim()
+    .replace(/[>|\\]+/g, "/")
+    .split("/")
+    .map((part) => part.trim().replace(/\s+/g, " "))
+    .filter(Boolean)
+    .join(" / ")
+    .toLowerCase();
+}
+
+function lastPathSegment(path: string): string {
+  const parts = path.split(" / ").map((part) => part.trim()).filter(Boolean);
+  return parts[parts.length - 1] || path;
+}
+
+export async function findCategoryIdByPath(input: string): Promise<string> {
+  const needle = normalizeCategoryPath(input);
+  if (!needle) {
+    throw new ApiError(400, "Category path is required");
+  }
+
+  const pathMap = await buildCategoryPathMap();
+  const entries = [...pathMap.entries()];
+  const exact = entries.filter(([, path]) => normalizeCategoryPath(path) === needle);
+  if (exact.length === 1) return exact[0][0];
+  if (exact.length > 1) {
+    throw new ApiError(400, `Category path "${input}" matches more than one category`);
+  }
+
+  const leaf = lastPathSegment(needle);
+  const leafMatches = entries.filter(([, path]) => lastPathSegment(normalizeCategoryPath(path)) === leaf);
+  if (leafMatches.length === 1) return leafMatches[0][0];
+  if (leafMatches.length > 1) {
+    throw new ApiError(
+      400,
+      `Category "${input}" is ambiguous. Use the full path, e.g. Garments / Women / Women's Sweat Tops & Hoodies`
+    );
+  }
+
+  throw new ApiError(400, `Category "${input}" was not found. Use the exact website category path`);
+}

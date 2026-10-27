@@ -6,10 +6,12 @@ import {
   listProducts,
   updateProduct,
 } from "../services/product.service";
+import { importProducts } from "../services/productImport.service";
 import { successResponse } from "../utils/ApiResponse";
 import { asyncHandler } from "../utils/asyncHandler";
 import { productFieldsSchema } from "../validators/product.validator";
 import { ApiError } from "../utils/ApiError";
+import { buildImportTemplateCsv } from "../utils/productImportTemplate";
 
 function readFiles(req: Request): Express.Multer.File[] {
   return Array.isArray(req.files) ? req.files : [];
@@ -64,4 +66,40 @@ export const putProduct = asyncHandler(async (req: Request, res: Response) => {
 export const removeProduct = asyncHandler(async (req: Request, res: Response) => {
   const result = await deleteProduct(req.params.id);
   res.status(200).json(successResponse("Product deleted", result));
+});
+
+function importFiles(req: Request) {
+  const files = req.files as
+    | { sheet?: Express.Multer.File[]; imagesZip?: Express.Multer.File[] }
+    | undefined;
+  return {
+    sheet: files?.sheet?.[0],
+    zip: files?.imagesZip?.[0],
+  };
+}
+
+export const getImportTemplate = asyncHandler(async (_req: Request, res: Response) => {
+  const csv = buildImportTemplateCsv();
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader("Content-Disposition", 'attachment; filename="maya-exports-product-import.csv"');
+  res.status(200).send(`\uFEFF${csv}`);
+});
+
+export const postProductImport = asyncHandler(async (req: Request, res: Response) => {
+  req.setTimeout(10 * 60 * 1000);
+  res.setTimeout(10 * 60 * 1000);
+  const { sheet, zip } = importFiles(req);
+  if (!sheet) {
+    throw new ApiError(400, "Upload a CSV or Excel file in the sheet field");
+  }
+  const result = await importProducts(sheet, zip);
+  const created = result.summary.created;
+  const failed = result.summary.failed;
+  const message =
+    failed && created
+      ? `Imported ${created} product${created === 1 ? "" : "s"}; ${failed} could not be imported`
+      : failed
+        ? "No products were created"
+        : `Imported ${created} product${created === 1 ? "" : "s"}`;
+  res.status(200).json(successResponse(message, result));
 });
