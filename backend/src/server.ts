@@ -2,12 +2,14 @@ import app from "./app";
 import { isCloudinaryConfigured } from "./config/cloudinary";
 import { connectDatabase } from "./config/db";
 import { env } from "./config/env";
+import { ensureDashboardIndexes } from "./services/adminDashboard.service";
 import { seedAdminUser } from "./services/auth.service";
 import { seedHeaderCategories, syncCategoryIndexes } from "./services/category.service";
 
 async function start() {
   await connectDatabase();
   await syncCategoryIndexes();
+  await ensureDashboardIndexes();
   await seedAdminUser();
   await seedHeaderCategories();
 

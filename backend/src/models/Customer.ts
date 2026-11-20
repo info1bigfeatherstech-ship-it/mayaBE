@@ -20,6 +20,7 @@ const customerSchema = new Schema(
       type: String,
       default: "Wholesale",
       enum: ["Key Account", "Retail Brand", "Boutique", "Wholesale"],
+      index: true,
     },
     primaryContact: { type: String, default: "", trim: true, maxlength: 80 },
     email: { type: String, default: "", trim: true, maxlength: 120 },

@@ -7,6 +7,8 @@ import {
   updateProduct,
 } from "../services/product.service";
 import { importProducts, previewImport } from "../services/productImport.service";
+import { clearDashboardCache } from "../middlewares/dashboardCache.middleware";
+import { ImportLog } from "../models/ImportLog";
 import { successResponse } from "../utils/ApiResponse";
 import { asyncHandler } from "../utils/asyncHandler";
 import { productFieldsSchema } from "../validators/product.validator";
@@ -54,17 +56,20 @@ export const getProduct = asyncHandler(async (req: Request, res: Response) => {
 export const postProduct = asyncHandler(async (req: Request, res: Response) => {
   const fields = parseProductFields(req);
   const product = await createProduct(fields, readFiles(req));
+  clearDashboardCache();
   res.status(201).json(successResponse("Product created", product));
 });
 
 export const putProduct = asyncHandler(async (req: Request, res: Response) => {
   const fields = parseProductFields(req);
   const product = await updateProduct(req.params.id, fields, readFiles(req), req.body.existingImages);
+  clearDashboardCache();
   res.status(200).json(successResponse("Product updated", product));
 });
 
 export const removeProduct = asyncHandler(async (req: Request, res: Response) => {
   const result = await deleteProduct(req.params.id);
+  clearDashboardCache();
   res.status(200).json(successResponse("Product deleted", result));
 });
 
@@ -116,5 +121,21 @@ export const postProductImport = asyncHandler(async (req: Request, res: Response
       : failed
         ? "No products were created"
         : `Imported ${created} product${created === 1 ? "" : "s"}`;
+
+  try {
+    await ImportLog.create({
+      fileName: sheet.originalname || "product-import",
+      importedBy: req.admin?.email || "unknown",
+      importedAt: new Date(),
+      rows: result.summary.rows,
+      families: result.summary.families,
+      ok: result.summary.created,
+      failed: result.summary.failed,
+    });
+    clearDashboardCache();
+  } catch (error) {
+    console.error("[ImportLog] Failed to persist import log:", error);
+  }
+
   res.status(200).json(successResponse(message, result));
 });

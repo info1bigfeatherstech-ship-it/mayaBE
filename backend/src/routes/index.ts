@@ -1,4 +1,5 @@
 import { Router } from "express";
+import adminDashboardRoutes from "./adminDashboard.routes";
 import authRoutes from "./auth.routes";
 import categoryRoutes from "./category.routes";
 import customerRoutes from "./customer.routes";
@@ -15,6 +16,7 @@ router.get("/health", (_req, res) => {
 });
 
 router.use("/auth", authRoutes);
+router.use("/admin/dashboard", adminDashboardRoutes);
 router.use("/categories", categoryRoutes);
 router.use("/factories", factoryRoutes);
 router.use("/customers", customerRoutes);

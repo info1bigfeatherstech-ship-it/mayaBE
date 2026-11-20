@@ -311,6 +311,13 @@ const productSchema = new Schema(
   { timestamps: true }
 );
 
+productSchema.index({ readyStockAvailability: 1 });
+productSchema.index({ factory: 1 });
+productSchema.index({ marketSuitability: 1 });
+productSchema.index({ updatedAt: -1 });
+productSchema.index({ createdAt: -1 });
+productSchema.index({ season: 1 });
+
 export type ProductDocument = InferSchemaType<typeof productSchema> & {
   _id: Types.ObjectId;
 };
