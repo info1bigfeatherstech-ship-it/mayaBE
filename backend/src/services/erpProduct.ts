@@ -142,6 +142,10 @@ export async function erpPayload(erp: ErpInput | undefined, productCode: string)
     sizeRange: data.sizeRange?.trim() || "",
     variant: data.variant || "No",
     variantDetails: normalizeVariants(data, productCode),
+    primaryAttributes: (data.primaryAttributes || [])
+      .map((entry) => ({ key: entry.key.trim(), value: entry.value.trim() }))
+      .filter((entry) => entry.key && entry.value)
+      .slice(0, 10),
     primarySubVariants: normalizeSubs(
       data.primarySubVariants,
       serialVariantSku(productCode, 0),

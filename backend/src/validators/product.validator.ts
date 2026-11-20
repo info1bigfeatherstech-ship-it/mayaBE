@@ -97,6 +97,7 @@ export const erpSchema = z.object({
   sizeRange: z.string().trim().max(120).optional().default(""),
   variant: z.enum(YES_NO).optional().default("No"),
   variantDetails: z.array(variantSchema).max(200).optional().default([]),
+  primaryAttributes: z.array(attributeSchema).max(10).optional().default([]),
   primarySubVariants: z.array(subVariantSchema).max(20).optional().default([]),
   factoryId: optionalId,
   factoryPriceEXW: z.string().trim().max(40).optional().default(""),

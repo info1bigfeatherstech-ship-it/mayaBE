@@ -10,6 +10,7 @@ import { ApiError } from "../utils/ApiError";
 import {
   groupImportFamilies,
   parseAttributes,
+  parseParentVariantCode,
   pickEnum,
   splitCommaList,
   uniquePreserve,
@@ -17,10 +18,12 @@ import {
   type ImportFamily,
   type ParsedAttributes,
 } from "../utils/productImportParse";
+import { buildImportErrorCsv } from "../utils/productImportTemplate";
 import { parseImportSpreadsheet } from "../utils/productImportSheet";
 import { asMulterFile, extractImportZip, type ZipImageFile } from "../utils/productImportZip";
 import type { ErpInput, ProductFieldsInput } from "../validators/product.validator";
 import { productFieldsSchema } from "../validators/product.validator";
+import { Product } from "../models/Product";
 import { findCategoryIdByPath } from "./category.service";
 import { createProduct } from "./product.service";
 
@@ -28,7 +31,32 @@ export type ProductImportFailure = {
   row: number;
   productCode: string;
   familyCode: string;
+  source: "sheet" | "images";
   reason: string;
+};
+
+export type ProductImportPreviewRow = {
+  row: number;
+  productCode: string;
+  familyCode: string;
+  name: string;
+  title: string;
+  categoryPath: string;
+  attributes: string;
+  ok: boolean;
+  issues: string[];
+};
+
+export type ProductImportPreview = {
+  rows: ProductImportPreviewRow[];
+  issues: ProductImportFailure[];
+  errorCsv: string;
+  summary: {
+    rows: number;
+    families: number;
+    ok: number;
+    failed: number;
+  };
 };
 
 export type ProductImportResult = {
@@ -36,6 +64,7 @@ export type ProductImportResult = {
   failed: ProductImportFailure[];
   skippedFolders: Array<{ folder: string; reason: string }>;
   warnings: string[];
+  errorCsv: string;
   summary: {
     families: number;
     rows: number;
@@ -69,12 +98,32 @@ function cell(member: FamilyMember, key: string): string {
   return (member.cells[key] || "").trim();
 }
 
-function failFamily(family: ImportFamily, reason: string): ProductImportFailure {
+function failFamily(
+  family: ImportFamily,
+  reason: string,
+  source: ProductImportFailure["source"] = "sheet"
+): ProductImportFailure {
   const primary = family.members.find((member) => member.serial === 1) || family.members[0];
   return {
     row: primary?.row || 0,
     productCode: primary?.code || family.family,
     familyCode: family.family,
+    source,
+    reason,
+  };
+}
+
+function failMember(
+  member: FamilyMember,
+  family: ImportFamily,
+  reason: string,
+  source: ProductImportFailure["source"] = "images"
+): ProductImportFailure {
+  return {
+    row: member.row,
+    productCode: member.code,
+    familyCode: family.family,
+    source,
     reason,
   };
 }
@@ -247,6 +296,7 @@ async function familyToProductInput(family: ImportFamily): Promise<{
     availableColors: listing.availableColors,
     sizeRange: listing.sizeRange,
     variant: extras.length ? "Yes" : "No",
+    primaryAttributes: primary.attributes,
     variantDetails: extras.map((item) => ({
       title: item.title,
       description: item.description,
@@ -307,61 +357,177 @@ async function familyToProductInput(family: ImportFamily): Promise<{
   };
 }
 
+function withSheetSource(
+  items: Array<{ row: number; productCode: string; familyCode: string; reason: string }>
+): ProductImportFailure[] {
+  return items.map((item) => ({ ...item, source: "sheet" as const }));
+}
+
+function emptyResult(
+  rows: number,
+  failed: ProductImportFailure[],
+  extra?: Partial<ProductImportResult>
+): ProductImportResult {
+  return {
+    created: [],
+    failed,
+    skippedFolders: [],
+    warnings: [],
+    errorCsv: buildImportErrorCsv(failed),
+    summary: {
+      families: 0,
+      rows,
+      created: 0,
+      failed: failed.length,
+      imagesQueued: 0,
+    },
+    ...extra,
+  };
+}
+
+export async function previewImport(sheet: Express.Multer.File): Promise<ProductImportPreview> {
+  const rows = await parseImportSpreadsheet(sheet);
+  const grouped = groupImportFamilies(rows);
+  const issues: ProductImportFailure[] = withSheetSource(grouped.failed);
+
+  const existing = grouped.families.length
+    ? await Product.find({ productCode: { $in: grouped.families.map((family) => family.family) } })
+        .select("productCode")
+        .lean()
+    : [];
+  const existingCodes = new Set(existing.map((item) => String(item.productCode || "")));
+
+  for (const family of grouped.families) {
+    if (existingCodes.has(family.family)) {
+      issues.push(failFamily(family, "Product code already exists"));
+      continue;
+    }
+    try {
+      await familyToProductInput(family);
+    } catch (error) {
+      issues.push(failFamily(family, readError(error)));
+    }
+  }
+
+  const issuesByFamily = new Map<string, string[]>();
+  const issuesByRow = new Map<number, string[]>();
+  for (const issue of issues) {
+    if (issue.familyCode) {
+      const list = issuesByFamily.get(issue.familyCode) || [];
+      list.push(issue.reason);
+      issuesByFamily.set(issue.familyCode, list);
+    }
+    if (issue.row) {
+      const list = issuesByRow.get(issue.row) || [];
+      list.push(issue.reason);
+      issuesByRow.set(issue.row, list);
+    }
+  }
+
+  const previewRows: ProductImportPreviewRow[] = rows.map((item) => {
+    let familyCode = "";
+    try {
+      familyCode = parseParentVariantCode(item.cells.productCode || "").family;
+    } catch {
+      familyCode = "";
+    }
+    const combined = [
+      ...(issuesByRow.get(item.row) || []),
+      ...(familyCode ? issuesByFamily.get(familyCode) || [] : []),
+    ];
+    const uniqueIssues = [...new Set(combined)];
+    return {
+      row: item.row,
+      productCode: item.cells.productCode || "",
+      familyCode,
+      name: item.cells.name || "",
+      title: item.cells.title || "",
+      categoryPath: item.cells.categoryPath || "",
+      attributes: item.cells.attributes || "",
+      ok: uniqueIssues.length === 0,
+      issues: uniqueIssues,
+    };
+  });
+
+  const failedFamilies = new Set(issues.map((item) => item.familyCode).filter(Boolean));
+  const okFamilies = grouped.families.filter((family) => !failedFamilies.has(family.family)).length;
+
+  return {
+    rows: previewRows,
+    issues,
+    errorCsv: buildImportErrorCsv(issues),
+    summary: {
+      rows: rows.length,
+      families: grouped.families.length,
+      ok: okFamilies,
+      failed: issues.length,
+    },
+  };
+}
+
 export async function importProducts(
   sheet: Express.Multer.File,
   zipFile?: Express.Multer.File
 ): Promise<ProductImportResult> {
-  const rows = await parseImportSpreadsheet(sheet);
-  const grouped = groupImportFamilies(rows);
-  const failed: ProductImportFailure[] = [...grouped.failed];
-  const warnings: string[] = [];
-
-  if (!grouped.families.length && failed.length) {
-    return {
-      created: [],
-      failed,
-      skippedFolders: [],
-      warnings,
-      summary: {
-        families: 0,
-        rows: rows.length,
-        created: 0,
-        failed: failed.length,
-        imagesQueued: 0,
-      },
-    };
+  if (!zipFile?.buffer?.length) {
+    throw new ApiError(400, "An images ZIP is required. Folders inside it must match the variant codes in the sheet.");
   }
 
+  const rows = await parseImportSpreadsheet(sheet);
+  const grouped = groupImportFamilies(rows);
+  const failed: ProductImportFailure[] = withSheetSource(grouped.failed);
+  const warnings: string[] = [];
+
   if (!grouped.families.length) {
-    throw new ApiError(400, "No valid products found in the spreadsheet");
+    return emptyResult(rows.length, failed, { summary: { families: 0, rows: rows.length, created: 0, failed: failed.length, imagesQueued: 0 } });
   }
 
   const parentCodes = grouped.families.flatMap((family) => family.members.map((member) => member.code));
-  let zipFolders = new Map<string, ZipImageFile[]>();
-  let skippedFolders: Array<{ folder: string; reason: string }> = [];
+  const extracted = extractImportZip(zipFile.buffer, parentCodes);
+  const zipFolders = extracted.folders;
+  const skippedFolders = [...extracted.skipped];
+  warnings.push(...extracted.warnings);
 
-  if (zipFile?.buffer?.length) {
-    const extracted = extractImportZip(zipFile.buffer, parentCodes);
-    zipFolders = extracted.folders;
-    skippedFolders = extracted.skipped;
-    warnings.push(...extracted.warnings);
-  } else if (zipFile && !zipFile.buffer?.length) {
-    throw new ApiError(400, "The ZIP file is empty");
+  for (const skipped of extracted.skipped) {
+    failed.push({
+      row: 0,
+      productCode: skipped.folder,
+      familyCode: "",
+      source: "images",
+      reason: skipped.reason,
+    });
   }
 
   const created: unknown[] = [];
   const usedFolders = new Set<string>();
   let imagesQueued = 0;
+  const blockedFamilies = new Set(failed.filter((item) => item.familyCode).map((item) => item.familyCode));
 
   for (const family of grouped.families) {
+    if (blockedFamilies.has(family.family)) continue;
     try {
       const prepared = await familyToProductInput(family);
+      const missing = prepared.members.filter((member) => !zipFolders.get(member.code)?.length);
+      if (missing.length) {
+        for (const member of missing) {
+          failed.push(
+            failMember(
+              family.members.find((row) => row.code === member.code) || family.members[0],
+              family,
+              `ZIP folder ${member.code} is missing or has no valid JPG, PNG, or WEBP images`,
+              "images"
+            )
+          );
+        }
+        continue;
+      }
       const files = filesForFamily(prepared.members, zipFolders, usedFolders);
       imagesQueued += files.length;
       const product = await createProduct(prepared.fields, files);
       created.push(product);
     } catch (error) {
-      failed.push(failFamily(family, readError(error)));
+      const message = readError(error);
+      failed.push(failFamily(family, message, /zip|image/i.test(message) ? "images" : "sheet"));
     }
   }
 
@@ -369,6 +535,13 @@ export async function importProducts(
     if (!usedFolders.has(folder)) {
       skippedFolders.push({
         folder,
+        reason: "Folder was not attached to an imported product",
+      });
+      failed.push({
+        row: 0,
+        productCode: folder,
+        familyCode: "",
+        source: "images",
         reason: "Folder was not attached to an imported product",
       });
     }
@@ -379,6 +552,7 @@ export async function importProducts(
     failed,
     skippedFolders,
     warnings,
+    errorCsv: buildImportErrorCsv(failed),
     summary: {
       families: grouped.families.length,
       rows: rows.length,

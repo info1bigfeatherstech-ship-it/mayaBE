@@ -5,6 +5,7 @@ import {
   getProducts,
   postProduct,
   postProductImport,
+  postProductImportPreview,
   putProduct,
   removeProduct,
 } from "../controllers/product.controller";
@@ -15,6 +16,7 @@ const router = Router();
 
 router.get("/", optionalAuth, getProducts);
 router.get("/import/template", requireAuth, getImportTemplate);
+router.post("/import/preview", requireAuth, productImportUpload, postProductImportPreview);
 router.post("/import", requireAuth, productImportUpload, postProductImport);
 router.get("/:id", optionalAuth, getProduct);
 router.post("/", requireAuth, productImageUpload, postProduct);

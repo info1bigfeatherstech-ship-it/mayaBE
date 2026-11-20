@@ -165,7 +165,11 @@ export function publicOptions(data: Record<string, any>): PublicOptions | undefi
         title: "",
         description: "",
         images: productImages,
-        attributes: optionAttributes({ color: data.color, size: "", attributes: [] }),
+        attributes: optionAttributes({
+          color: data.color,
+          size: "",
+          attributes: data.primaryAttributes || [],
+        }),
         primary: true,
         children: primaryChildren,
       },

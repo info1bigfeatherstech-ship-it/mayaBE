@@ -283,6 +283,7 @@ function serializeProduct(
     sizeRange: data.sizeRange || "",
     variant: data.variant === "Yes" ? "Yes" : "No",
     variantDetails: serializeVariants(data),
+    primaryAttributes: variantAttributes({ attributes: data.primaryAttributes, color: data.color, size: "" }),
     primarySubVariants: serializeSubVariants(
       data.primarySubVariants,
       serialVariantSku(String(data.productCode || ""), 0)

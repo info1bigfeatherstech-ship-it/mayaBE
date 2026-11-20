@@ -6,7 +6,7 @@ import {
   listProducts,
   updateProduct,
 } from "../services/product.service";
-import { importProducts } from "../services/productImport.service";
+import { importProducts, previewImport } from "../services/productImport.service";
 import { successResponse } from "../utils/ApiResponse";
 import { asyncHandler } from "../utils/asyncHandler";
 import { productFieldsSchema } from "../validators/product.validator";
@@ -85,12 +85,27 @@ export const getImportTemplate = asyncHandler(async (_req: Request, res: Respons
   res.status(200).send(`\uFEFF${csv}`);
 });
 
+export const postProductImportPreview = asyncHandler(async (req: Request, res: Response) => {
+  const { sheet } = importFiles(req);
+  if (!sheet) {
+    throw new ApiError(400, "Upload a CSV or Excel file in the sheet field");
+  }
+  const result = await previewImport(sheet);
+  const message = result.issues.length
+    ? `Found ${result.issues.length} problem${result.issues.length === 1 ? "" : "s"} in the spreadsheet`
+    : `Spreadsheet looks good (${result.summary.families} product${result.summary.families === 1 ? "" : "s"})`;
+  res.status(200).json(successResponse(message, result));
+});
+
 export const postProductImport = asyncHandler(async (req: Request, res: Response) => {
   req.setTimeout(10 * 60 * 1000);
   res.setTimeout(10 * 60 * 1000);
   const { sheet, zip } = importFiles(req);
   if (!sheet) {
     throw new ApiError(400, "Upload a CSV or Excel file in the sheet field");
+  }
+  if (!zip) {
+    throw new ApiError(400, "An images ZIP is required. Folders inside it must match the variant codes in the sheet.");
   }
   const result = await importProducts(sheet, zip);
   const created = result.summary.created;

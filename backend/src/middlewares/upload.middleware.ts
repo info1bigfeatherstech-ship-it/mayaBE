@@ -66,7 +66,7 @@ const importMulter = multer({
       cb(null, true);
       return;
     }
-    cb(new ApiError(400, "Unexpected import field. Use sheet and optional imagesZip"));
+    cb(new ApiError(400, "Unexpected import field. Use sheet and imagesZip"));
   },
 }).fields([
   { name: "sheet", maxCount: 1 },
@@ -85,7 +85,7 @@ export function productImportUpload(req: Request, res: Response, next: NextFunct
         return;
       }
       if (err.code === "LIMIT_UNEXPECTED_FILE") {
-        next(new ApiError(400, "Upload one spreadsheet as sheet and optionally one ZIP as imagesZip"));
+        next(new ApiError(400, "Upload one spreadsheet as sheet and one ZIP as imagesZip"));
         return;
       }
       next(new ApiError(400, "Invalid import upload"));

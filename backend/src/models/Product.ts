@@ -234,6 +234,16 @@ const productSchema = new Schema(
     },
     sizeRange: { type: String, default: "", trim: true, maxlength: 120 },
     variant: { type: String, enum: ["Yes", "No"], default: "No" },
+    primaryAttributes: {
+      type: [variantAttributeSchema],
+      default: [],
+      validate: {
+        validator(value: unknown[]) {
+          return Array.isArray(value) && value.length <= 10;
+        },
+        message: "A product can have a maximum of 10 primary variant fields",
+      },
+    },
     primarySubVariants: {
       type: [subVariantSchema],
       default: [],

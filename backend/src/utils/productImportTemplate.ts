@@ -1,8 +1,26 @@
-function csvEscape(value: string): string {
+export function csvEscape(value: string): string {
   if (/[",\n\r]/.test(value)) {
     return `"${value.replace(/"/g, '""')}"`;
   }
   return value;
+}
+
+export function buildImportErrorCsv(
+  issues: Array<{ row?: number; productCode?: string; familyCode?: string; source?: string; reason?: string }>
+): string {
+  const header = ["row", "productCode", "familyCode", "source", "reason"];
+  const lines = issues.map((issue) =>
+    [
+      issue.row ? String(issue.row) : "",
+      issue.productCode || "",
+      issue.familyCode || "",
+      issue.source || "sheet",
+      issue.reason || "",
+    ]
+      .map(csvEscape)
+      .join(",")
+  );
+  return `${[header.join(","), ...lines].join("\r\n")}\r\n`;
 }
 
 export const IMPORT_TEMPLATE_HEADERS = [
